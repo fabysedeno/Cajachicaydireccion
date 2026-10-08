@@ -179,6 +179,15 @@ tr:last-child td{border-bottom:none;}
   #print-area{display:block !important;position:static;margin:20px;font-family:Georgia,'Times New Roman',serif;color:#20201B;}
 }
 
+/* ---- Diferenciar Operaciones y Dirección (misma paleta) ---- */
+.tag-op{background:var(--sage-100);color:var(--forest-700);}
+.tag-dir{background:var(--gold-100);color:var(--gold-700);}
+tr.row-op>td:first-child{box-shadow:inset 4px 0 0 var(--sage-500);}
+tr.row-dir>td:first-child{box-shadow:inset 4px 0 0 var(--gold-600);}
+tr.row-dir>td{background:#FBF5E6;}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-700);margin-top:12px;}
+.legend .sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px;}
+
 /* ---- Ajustes para celular (al final para que ninguna regla anterior los pise) ---- */
 @media(max-width:640px){
   .app{padding-left:14px;padding-right:14px;}
@@ -193,15 +202,12 @@ tr:last-child td{border-bottom:none;}
   .bar-label{width:100%;}
   .bar-amt{width:100%;justify-content:flex-start;}
   /* listas de renglones: en celular cada renglón se apila como tarjeta en vez de una tabla angosta */
-  #gd-thead,#rg-items thead{display:none;}
-  #gd-tbody tr,#rg-tbody tr{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 0;border-bottom:1px solid var(--line);}
-  #gd-tbody td,#rg-tbody td{padding:0;border:none;display:block;min-width:0;}
-  #gd-tbody td:nth-child(1),#gd-tbody td:nth-child(2){grid-column:1 / -1;}
-  #gd-tbody td:nth-child(3){grid-column:1;}
-  #gd-tbody td:nth-child(4){grid-column:2;justify-self:end;}
+  #rg-items thead{display:none;}
+  #rg-tbody tr{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 0;border-bottom:1px solid var(--line);}
+  #rg-tbody td{padding:0;border:none;display:block;min-width:0;}
   #rg-tbody td:nth-child(1){grid-column:1 / -1;}
   #rg-tbody td:nth-child(5){justify-self:end;}
-  #gd-tbody input,#rg-tbody input{width:100% !important;}
+  #rg-tbody input{width:100% !important;}
 }
 </style>
 </head>
@@ -214,7 +220,7 @@ tr:last-child td{border-bottom:none;}
 <script>
 /* ============ CONFIGURACIÓN: pega aquí la URL /exec de tu Web App de Apps Script ============ */
 window.APP_CONFIG = {
-  APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbw9lcuEsuveyUd_GK0CKj-jRYIsUlmPGyKIsW4nE-U12liv9whYRD8Y73Z_sonmm22fFg/exec",
+  APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbwakKorZMZp8ZFMVSKh9MfYVGu7tp8WSh6xUarSAUcB6NXZst-8gNWHGQJjmAIZqzp3uw/exec",
   API_TOKEN: ""
 };
 </script>
@@ -513,7 +519,17 @@ function migrateDB(){
   if(!DB.historial) DB.historial = [];
   delete DB.sheetsWebhook;
   if(!Array.isArray(DB.gastosDireccion)) DB.gastosDireccion = [];   // gastos que Dirección paga directamente (separados de Operaciones)
-  delete DB.categoriasDireccion;   // Dirección usa las MISMAS áreas que Operaciones (DB.salones)
+  delete DB.categoriasDireccion;
+  // Compras de Dirección: misma forma que una compra de Operaciones (y se convierte el formato anterior si existía)
+  DB.gastosDireccion.forEach(g=>{
+    g.origen = "direccion";
+    if(g.salon === undefined && g.area !== undefined){ g.salon = g.area; delete g.area; }
+    if(g.costo === undefined && g.monto !== undefined){ g.costo = g.monto; delete g.monto; }
+    if(g.fechaPedido === undefined){ g.fechaPedido = g.fecha || ""; g.fechaEntrega = g.fecha || ""; delete g.fecha; }
+    if(g.cantidad === undefined) g.cantidad = "";
+    if(g.avisoAnticipado === undefined) g.avisoAnticipado = false;
+    if(g.observacion === undefined) g.observacion = "";
+  });
   if(!DB.pinEscuela) DB.pinEscuela = "0009";
   if(!DB.pin) DB.pin = "3097";
   if(!DB.pinDireccion) DB.pinDireccion = "7200";
@@ -532,7 +548,7 @@ function notaTimestamp(n){
 function contarNotasNuevas(salon){
   const key = salon || (typeof state!=="undefined" && state.role==="direccion" ? "_direccion" : "_operaciones");
   const lastSeen = (DB.observacionesLeidas && DB.observacionesLeidas[key]) || "";
-  const notas = salon ? gastosDeSalon(salon).filter(g=>g.observacion && g.observacion.trim()) : DB.gastos.filter(g=>g.observacion && g.observacion.trim());
+  const notas = salon ? gastosDeSalon(salon).filter(g=>g.observacion && g.observacion.trim()) : todosLosGastos().filter(g=>g.observacion && g.observacion.trim());
   return notas.filter(n => notaTimestamp(n) > lastSeen).length;
 }
 async function marcarObservacionesLeidas(salon){
@@ -556,7 +572,7 @@ async function enviarASheets(tipo, encabezados, fila, urlManual){
 // Permisos: Operaciones modifica todo; Dirección solo lo que ella misma registró.
 function puedeModificarGasto(g){
   if(state.role === "operaciones") return true;
-  if(state.role === "direccion") return g.registradoRol === "direccion";
+  if(state.role === "direccion") return esGastoDir(g) || g.registradoRol === "direccion";
   return false;
 }
 // Validación centralizada (usada por registrar, editar y escanear ticket)
@@ -591,9 +607,10 @@ async function registrarGasto(items, meta){
 }
 async function registrarGastoInterno(items, meta){
   meta = meta || {};
+  const dir = meta.ledger === "direccion";   // libro de Dirección o libro de caja chica (Operaciones)
   // Si un intento anterior idéntico falló (p. ej. se perdió la respuesta aunque el servidor sí guardó),
   // se reutilizan los mismos id: así el reintento no duplica la compra.
-  const firma = JSON.stringify([items, meta.tienda || ""]) + "|" + state.role;
+  const firma = JSON.stringify([items, meta.tienda || ""]) + "|" + state.role + "|" + (dir ? "d" : "o");
   const reusar = intentoPrevio && intentoPrevio.firma === firma && Date.now() - intentoPrevio.ts < 300000;
   const ticketId = reusar ? intentoPrevio.ticketId : ((items.length > 1 || meta.tienda) ? "t" + uid() : "");
   const ids = reusar ? intentoPrevio.ids : items.map(()=>uid());
@@ -605,70 +622,46 @@ async function registrarGastoInterno(items, meta){
       observacion: i === 0 ? (d.observacion || "") : "", // la observación del ticket se guarda una sola vez
       registradoEn: ahora, registradoPor: state.nombreOp || "Operaciones", registradoRol: state.role };
     if(ticketId){ g.ticketId = ticketId; g.tienda = meta.tienda || ""; }
+    if(dir) g.origen = "direccion";
     return g;
   });
   const ok = await mutarDB(db=>{
-    const ya = new Set(db.gastos.map(x=>x.id));
-    nuevos.forEach(x=>{ if(!ya.has(x.id)) db.gastos.push(x); }); // idempotente ante reintentos
+    if(dir) db.gastosDireccion = db.gastosDireccion || [];
+    const arr = dir ? db.gastosDireccion : db.gastos;
+    const ya = new Set(arr.map(x=>x.id));
+    nuevos.forEach(x=>{ if(!ya.has(x.id)) arr.push(x); }); // idempotente ante reintentos
   });
   if(!ok) return false;
   intentoPrevio = null;
-  enviarFilasASheets("Gastos", ENCAB_GASTOS, nuevos.map(filaGasto));
+  enviarFilasASheets(dir ? "Gastos Dirección" : "Gastos", ENCAB_GASTOS, nuevos.map(filaGasto));
   return true;
 }
-/* ---- Gastos de Dirección: libro APARTE. Ninguna función de Operaciones (presupuestos, fondos, saldos) lo lee. ---- */
-const ENCAB_GASTOS_DIR = ["Fecha","Mes","Área","Concepto","Monto","Lote","Registró","Registrado"];
-function puedeUsarGastosDir(){ return state.role === "operaciones" || state.role === "direccion"; }
+/* ---- Gastos de Dirección ----
+   Libro propio (DB.gastosDireccion) con la MISMA forma que una compra de Operaciones.
+   · CUENTAN para el PRESUPUESTO de cada salón (gastado, restante, % usado): lo hace gastosDeSalon().
+   · NO cuentan para el DINERO DE CAJA: fondos recibidos y saldo disponible usan solo DB.gastos. */
+function todosLosGastos(){ return DB.gastos.concat(DB.gastosDireccion||[]); }
+function esGastoDir(g){ return g.origen === "direccion"; }
 function hoyISO(){ const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
-function validarGastoDir(d){
-  if(!d.fecha || !mesDeFecha(d.fecha)) return "Indica una fecha válida.";
-  if(!SALONES.includes(d.area)) return "Elige un área válida.";
-  if(!String(d.concepto||"").trim()) return "Escribe el concepto del gasto.";
-  if(String(d.concepto).trim().length > 120) return "El concepto es demasiado largo (máximo 120 caracteres).";
-  if(!(Number(d.monto) > 0)) return "El monto debe ser mayor a $0.";
-  return null;
-}
-function totalDirMes(mes, area){ return (DB.gastosDireccion||[]).filter(g=>g.mes===mes && (!area || g.area===area)).reduce((a,g)=>a+Number(g.monto||0),0); }
-function totalDirArea(area){ return (DB.gastosDireccion||[]).filter(g=>g.area===area).reduce((a,g)=>a+Number(g.monto||0),0); }
-function totalDirCiclo(){ return (DB.gastosDireccion||[]).reduce((a,g)=>a+Number(g.monto||0),0); }
-function totalOpMes(mes){ return SALONES.reduce((a,s)=>a+totalGastado(s,mes),0); }
-function totalOpCiclo(){ return MESES.reduce((a,m)=>a+totalOpMes(m),0); }
-let registrandoDir = false, intentoPrevioDir = null;
-// ÚNICO punto de entrada para guardar gastos de Dirección (1 o varios renglones con la misma fecha)
-async function registrarGastosDireccion(items){
-  if(registrandoDir) return false;
-  registrandoDir = true;
-  try{
-    const firma = JSON.stringify(items) + "|" + state.role;
-    const reusar = intentoPrevioDir && intentoPrevioDir.firma === firma && Date.now() - intentoPrevioDir.ts < 300000;
-    const ids = reusar ? intentoPrevioDir.ids : items.map(()=>uid());
-    const lote = reusar ? intentoPrevioDir.lote : "l" + uid();
-    intentoPrevioDir = { firma, ids, lote, ts: Date.now() };
-    const ahora = new Date().toISOString();
-    const nuevos = items.map((d,i)=>({ id: ids[i], fecha: d.fecha, mes: mesDeFecha(d.fecha), area: d.area, concepto: String(d.concepto).trim(),
-      monto: Number(d.monto), lote, registradoEn: ahora, registradoPor: state.nombreOp || "Dirección", registradoRol: state.role }));
-    const ok = await mutarDB(db=>{
-      db.gastosDireccion = db.gastosDireccion || [];
-      const ya = new Set(db.gastosDireccion.map(x=>x.id));
-      nuevos.forEach(x=>{ if(!ya.has(x.id)) db.gastosDireccion.push(x); });
-    });
-    if(!ok) return false;
-    intentoPrevioDir = null;
-    enviarFilasASheets("Gastos Dirección", ENCAB_GASTOS_DIR, nuevos.map(g=>[g.fecha,g.mes,g.area,g.concepto,g.monto,g.lote,g.registradoPor,new Date().toLocaleString("es-MX")]));
-    return true;
-  } finally { registrandoDir = false; }
-}
+function totalDirMes(mes, salon){ return (DB.gastosDireccion||[]).filter(g=>g.mes===mes && (!salon || g.salon===salon)).reduce((a,g)=>a+Number(g.costo||0),0); }
+function totalDirArea(salon){ return (DB.gastosDireccion||[]).filter(g=>g.salon===salon).reduce((a,g)=>a+Number(g.costo||0),0); }
+function totalDirCiclo(){ return SALONES.reduce((a,s)=>a+totalDirArea(s),0); }
+function totalGastoOpSalon(salon){ return DB.gastos.filter(g=>g.salon===salon).reduce((a,g)=>a+Number(g.costo||0),0); }
+function totalOpMes(mes){ return SALONES.reduce((a,s)=>a+DB.gastos.filter(g=>g.salon===s && g.mes===mes).reduce((x,g)=>x+Number(g.costo||0),0),0); }
+function totalOpCiclo(){ return totalGastoGeneral(); }
 function totalFondosRecibidos(){
   return DB.fondos.reduce((a,f)=>a+Number(f.monto||0),0);
 }
+// DINERO DE CAJA: solo compras de Operaciones. Las de Dirección las paga ella directamente y no descuentan el saldo.
 function totalGastoGeneral(){
-  return SALONES.reduce((a,s)=>a+totalGastadoCiclo(s),0);
+  return SALONES.reduce((a,s)=>a+totalGastoOpSalon(s),0);
 }
 function saldoDisponible(){
   return totalFondosRecibidos() - totalGastoGeneral();
 }
 
-function gastosDeSalon(salon){ return DB.gastos.filter(g=>g.salon===salon); }
+// Para el PRESUPUESTO de cada salón cuentan las compras de Operaciones Y de Dirección
+function gastosDeSalon(salon){ return todosLosGastos().filter(g=>g.salon===salon); }
 function gastosDeSalonMes(salon, mes){ return gastosDeSalon(salon).filter(g=>g.mes===mes); }
 function totalGastado(salon, mes){
   return gastosDeSalonMes(salon, mes).reduce((a,g)=>a+Number(g.costo||0),0);
@@ -841,7 +834,7 @@ function showEditGastoModal(gasto, onSaved){
     const err = validarGasto(cambios);
     if(err){ showToast(err); return; }
     if(!puedeModificarGasto(gasto)){ showToast("No tienes permiso para modificar esta compra."); return; }
-    const ok = await mutarDB(db=>{ const g = db.gastos.find(x=>x.id===gasto.id); if(g) Object.assign(g, cambios); });
+    const ok = await mutarDB(db=>{ const g = db.gastos.find(x=>x.id===gasto.id) || (db.gastosDireccion||[]).find(x=>x.id===gasto.id); if(g) Object.assign(g, cambios); });
     if(!ok) return;
     wrap.remove();
     showToast("Compra actualizada.");
@@ -952,7 +945,10 @@ function bindGlobal(){
 function renderOperaciones(){
   const soloLectura = esSoloLectura();
   let tabs = [["resumen","Resumen del ciclo"],["registrar","Registrar compra"],["presupuestos","Presupuestos"],["fondos","Fondos recibidos"],["gastos","Todos los gastos"],["gastosdir","Gastos de Dirección"],["reportes","Reportes"],["observaciones","Observaciones"],["historial","Historial de ciclos"],["ajustes","Ajustes"]];
-  if(soloLectura) tabs = tabs.filter(([k])=> k!=="ajustes" && k!=="fondos"); // Dirección no usa la pestaña de fondos
+  if(soloLectura){ // Dirección: sus compras, el resumen y consultas. Sin Registrar compra, Presupuestos, Fondos ni Ajustes
+    tabs = tabs.filter(([k])=> !["ajustes","fondos","registrar","presupuestos"].includes(k));
+    const d = tabs.findIndex(([k])=>k==="gastosdir"); if(d > 1) tabs.splice(1, 0, tabs.splice(d,1)[0]);
+  }
   if(!tabs.some(([k])=>k===state.tab)) state.tab = "resumen";
   const notasCount = contarNotasNuevas(null);
   return `
@@ -1012,13 +1008,13 @@ function renderOpResumen(){
   return `
   <div class="grid grid-4" style="margin-bottom:16px;">
     <div class="card"><p class="metric-label">Presupuesto del ciclo</p><p class="metric-value">${fmtMoney(totalPresupuesto)}</p></div>
-    <div class="card"><p class="metric-label">Gastado en el ciclo</p><p class="metric-value">${fmtMoney(totalGasto)}</p></div>
+    <div class="card"><p class="metric-label">Gastado en el ciclo</p><p class="metric-value">${fmtMoney(totalGasto)}</p><p class="metric-sub">Operaciones + Dirección</p></div>
     <div class="card"><p class="metric-label">Restante</p><p class="metric-value" style="color:${restante<0?'#A6453D':'#16281F'}">${fmtMoney(restante)}</p></div>
     <div class="card"><p class="metric-label">% usado</p><p class="metric-value">${pctUsado}%</p></div>
   </div>
   <div class="grid grid-2" style="margin-bottom:26px;">
     <div class="card"><p class="metric-label">Fondos recibidos de Dirección</p><p class="metric-value">${fmtMoney(totalFondosRecibidos())}</p><p class="metric-sub">Respaldo acumulado en el ciclo</p></div>
-    <div class="card"><p class="metric-label">Saldo disponible ahora</p><p class="metric-value" style="color:${saldoDisponible()<0?'#A6453D':'#16281F'}">${fmtMoney(saldoDisponible())}</p><p class="metric-sub">Fondos recibidos menos gasto general</p></div>
+    <div class="card"><p class="metric-label">Saldo disponible ahora</p><p class="metric-value" style="color:${saldoDisponible()<0?'#A6453D':'#16281F'}">${fmtMoney(saldoDisponible())}</p><p class="metric-sub">Fondos recibidos menos gastos de Operaciones (las compras de Dirección no se descuentan)</p></div>
   </div>
   <div class="card" style="margin-bottom:22px;">
     <p class="section-title"><span class="dot"></span>Gasto vs. presupuesto por salón (ciclo completo)</p>
@@ -1026,7 +1022,7 @@ function renderOpResumen(){
   </div>
   <div class="flex-between" style="margin-bottom:14px;">
     <p class="section-title" style="margin:0;"><span class="dot"></span>Detalle por mes y salón</p>
-    <button class="btn btn-secondary" id="btn-exportar">Exportar CSV</button>
+    ${state.role==="tutor" ? "" : '<button class="btn btn-secondary" id="btn-exportar">Exportar CSV</button>'}
   </div>
   <div class="card" style="overflow-x:auto;">
     <table>
@@ -1040,9 +1036,9 @@ function bindOpResumen(){
   if(btn) btn.onclick = exportarCSV;
 }
 function exportarCSV(){
-  let rows = [["Salón","Mes","Concepto","Cantidad","Costo","Fecha pedido","Fecha entrega","Avisó con anticipación","Observación","Registró"]];
-  DB.gastos.forEach(g=>{
-    rows.push([g.salon,g.mes,g.concepto,g.cantidad,g.costo,g.fechaPedido||"",g.fechaEntrega||"",g.avisoAnticipado?"Sí":"No",g.observacion||"",g.registradoPor||""]);
+  let rows = [["Salón","Mes","Concepto","Cantidad","Costo","Fecha pedido","Fecha entrega","Avisó con anticipación","Observación","Registró","Origen"]];
+  todosLosGastos().forEach(g=>{
+    rows.push([g.salon,g.mes,g.concepto,g.cantidad,g.costo,g.fechaPedido||"",g.fechaEntrega||"",g.avisoAnticipado?"Sí":"No",g.observacion||"",g.registradoPor||"",esGastoDir(g)?"Dirección":"Operaciones"]);
   });
   const csvSeguro = (c)=>{ const t = String(c); return (typeof c === "string" && /^[=+\-@\t\r]/.test(t)) ? "'" + t : t; };
   const csv = rows.map(r=>r.map(c=>`"${csvSeguro(c).replace(/"/g,'""')}"`).join(",")).join("\n");
@@ -1064,11 +1060,13 @@ function filaInsumoHTML(it){
     <td><button type="button" class="link-btn it-del" title="Quitar">✕</button></td>
   </tr>`;
 }
-function renderOpRegistrar(){
+function renderOpRegistrar(modo){
+  const dir = modo === "direccion";
   return `
   <div class="card" style="max-width:780px;">
-    <p class="section-title"><span class="dot"></span>Registrar compra</p>
+    <p class="section-title"><span class="dot"></span>${dir ? "Registrar compra de Dirección" : "Registrar compra"}</p>
     <p class="small-muted" style="margin-top:0;">Una compra puede tener varios insumos (un ticket). Escanea el ticket o captura los insumos en la lista; se registran todos juntos y cada insumo queda visible por separado. Con un solo renglón puedes registrar el total de la cuenta.</p>
+    ${dir ? `<p class="small-muted" style="margin-top:0;">Se guarda en el libro de Dirección: cuenta en el presupuesto del salón elegido, pero no descuenta el saldo de caja de Operaciones.</p>` : ""}
     <div class="grid grid-2">
       <div class="field"><label>Salón</label>
         <select id="rg-salon">${SALONES.map(s=>`<option value="${s}">${s}</option>`).join("")}</select>
@@ -1123,7 +1121,8 @@ function comprimirImagen(file, maxPx, calidad){
     img.src = url;
   });
 }
-function bindOpRegistrar(){
+function bindOpRegistrar(modo, alTerminar){
+  const dir = modo === "direccion";
   const tbody = document.getElementById("rg-tbody");
   const recalcular = ()=>{
     const total = [...tbody.querySelectorAll(".it-costo")].reduce((a,i)=>a+(Number(i.value)||0),0);
@@ -1221,9 +1220,10 @@ function bindOpRegistrar(){
         <p style="margin:8px 0 2px;font-weight:600;">Total: ${fmtMoney(total)}</p>
         ${avisoExtra}
       </div>`, async ()=>{
-      const ok = await registrarGasto(items, { tienda });
+      const ok = await registrarGasto(items, { tienda, ledger: dir ? "direccion" : "operaciones" });
       if(!ok) return;
       showToast(items.length > 1 ? `Compra registrada (${items.length} insumos).` : "Compra registrada.");
+      if(alTerminar){ alTerminar(); return; }
       document.getElementById("op-content").innerHTML = renderOpRegistrar();
       bindOpRegistrar();
     }, "Sí, registrar");
@@ -1973,7 +1973,7 @@ function fondosDelMes(mes){
   return DB.fondos.filter(f=> mesDeFecha(f.fecha)===mes);
 }
 function gastosDelMesTodos(mes){
-  return DB.gastos.filter(g=>g.mes===mes).slice().sort((a,b)=>a.salon.localeCompare(b.salon));
+  return todosLosGastos().filter(g=>g.mes===mes).map(g=> esGastoDir(g) ? Object.assign({}, g, { concepto: g.concepto + " (Dirección)" }) : g).sort((a,b)=>a.salon.localeCompare(b.salon));
 }
 function renderOpReportes(){
   return `
@@ -2214,7 +2214,7 @@ function bindOpReportes(){
 
 /* ---------------------------- HISTORIAL DE CICLOS ---------------------------- */
 function renderPromedioSalones(){
-  const idx = MESES.map((m,i)=> DB.gastos.some(g=>g.mes===m) ? i : -1).filter(i=>i>=0);
+  const idx = MESES.map((m,i)=> todosLosGastos().some(g=>g.mes===m) ? i : -1).filter(i=>i>=0);
   const nMeses = idx.length ? Math.max(...idx) - Math.min(...idx) + 1 : 0; // meses transcurridos con movimiento
   let totGlobal = 0;
   const filas = SALONES.map(s=>{
@@ -2295,6 +2295,7 @@ function bindOpHistorial(){
         DB.presupuestos = JSON.parse(JSON.stringify(ultimo.presupuestos));
         DB.gastos = JSON.parse(JSON.stringify(ultimo.gastos));
         DB.fondos = JSON.parse(JSON.stringify(ultimo.fondos));
+        DB.gastosDireccion = JSON.parse(JSON.stringify(ultimo.gastosDireccion||[]));
         SALONES = DB.salones;
         DB.historial = ordenados.slice(0, ordenados.length-1);
         await saveDB();
@@ -2339,11 +2340,12 @@ function renderOpGastos(){
       <div class="field" style="margin:0;"><label>Hasta</label><input id="fg-hasta" type="date" style="width:150px;"></div>
       <button class="btn btn-secondary" id="fg-limpiar">Limpiar filtros</button>
     </div>
+    ${leyendaOrigen()}
   </div>
   <div class="card" id="gastos-tabla-wrap" style="overflow-x:auto;">${renderTablaGastos("Todos","Todos","","","")}</div>`;
 }
 function filtrarGastos(fs, fm, fq, fd1, fd2){
-  let list = DB.gastos.slice().sort((a,b)=> (b.registradoEn||"").localeCompare(a.registradoEn||""));
+  let list = todosLosGastos().sort((a,b)=> (b.registradoEn||"").localeCompare(a.registradoEn||""));
   if(fs && fs!=="Todos") list = list.filter(g=>g.salon===fs);
   if(fm && fm!=="Todos") list = list.filter(g=>g.mes===fm);
   if(fq && fq.trim()){
@@ -2360,17 +2362,40 @@ function renderTablaGastos(fs, fm, fq, fd1, fd2){
   const esDireccion = state.role === "direccion";
   if(list.length===0) return `<div class="empty">Sin gastos registrados con estos filtros.</div>`;
   return `<table>
-    <tr><th>Salón</th><th>Mes</th><th>Concepto</th><th>Cant.</th><th>Costo</th><th>Entrega</th><th>Aviso</th><th>Registró</th><th></th></tr>
+    <tr><th>Origen</th><th>Salón</th><th>Mes</th><th>Concepto</th><th>Cant.</th><th>Costo</th><th>Entrega</th><th>Aviso</th><th>Registró</th><th></th></tr>
     ${list.map(g=>{
       const acciones = puedeModificarGasto(g) ? `<button class="link-btn" data-edit="${g.id}">Editar</button> · <button class="link-btn" data-del="${g.id}">Eliminar</button>` : "";
-      return `<tr>
-      <td>${g.salon}</td><td>${g.mes}</td><td>${escAttr(g.concepto)}${g.ticketId ? `<div class="small-muted" style="font-size:11px;">🧾 ${escAttr(g.tienda || "Ticket")}</div>` : ""}</td><td>${escAttr(g.cantidad||"—")}</td>
+      return `<tr class="${esGastoDir(g) ? "row-dir" : "row-op"}">
+      <td>${tagOrigen(g)}</td><td>${g.salon}</td><td>${g.mes}</td><td>${escAttr(g.concepto)}${g.ticketId ? `<div class="small-muted" style="font-size:11px;">🧾 ${escAttr(g.tienda || "Ticket")}</div>` : ""}</td><td>${escAttr(g.cantidad||"—")}</td>
       <td>${fmtMoney(g.costo)}</td><td>${g.fechaEntrega||"—"}</td>
       <td>${g.avisoAnticipado? '<span class="tag tag-ok">Sí</span>':'<span class="tag tag-warn">No</span>'}</td>
       <td>${escAttr(g.registradoPor||"—")}</td>
       <td>${acciones}</td>
     </tr>`;}).join("")}
   </table>`;
+}
+// Editar / eliminar una compra de cualquiera de los dos libros (respetando permisos)
+function bindFilasGasto(refresh){
+  document.querySelectorAll("[data-del]").forEach(btn=>{
+    btn.onclick = ()=>{
+      showConfirmModal("¿Eliminar este gasto? Esta acción no se puede deshacer.", async ()=>{
+        const id = btn.dataset.del;
+        const g0 = todosLosGastos().find(g=>g.id===id);
+        if(!g0 || !puedeModificarGasto(g0)){ showToast("No tienes permiso para eliminar esta compra."); return; }
+        const ok = await mutarDB(db=>{
+          const g = db.gastos.find(x=>x.id===id) || (db.gastosDireccion||[]).find(x=>x.id===id);
+          if(g && puedeModificarGasto(g)){ db.gastos = db.gastos.filter(x=>x.id!==id); db.gastosDireccion = (db.gastosDireccion||[]).filter(x=>x.id!==id); }
+        });
+        if(ok) refresh();
+      }, "Sí, eliminar");
+    };
+  });
+  document.querySelectorAll("[data-edit]").forEach(btn=>{
+    btn.onclick = ()=>{
+      const g = todosLosGastos().find(x=>x.id===btn.dataset.edit);
+      if(g && puedeModificarGasto(g)) showEditGastoModal(g, refresh);
+    };
+  });
 }
 function bindOpGastos(){
   const refresh = ()=>{
@@ -2401,9 +2426,9 @@ function bindOpGastos(){
     const fq = document.getElementById("fg-buscar").value;
     const fd1 = document.getElementById("fg-desde").value;
     const fd2 = document.getElementById("fg-hasta").value;
-    const rows = [["Salón","Mes","Concepto","Cantidad","Costo","Fecha pedido","Fecha entrega","Avisó con anticipación","Observación","Registró"]];
+    const rows = [["Salón","Mes","Concepto","Cantidad","Costo","Fecha pedido","Fecha entrega","Avisó con anticipación","Observación","Registró","Origen"]];
     filtrarGastos(fs, fm, fq, fd1, fd2).forEach(g=>{
-      rows.push([g.salon, g.mes, g.concepto, g.cantidad||"", Number(g.costo)||0, g.fechaPedido||"", g.fechaEntrega||"", g.avisoAnticipado?"Sí":"No", g.observacion||"", g.registradoPor||""]);
+      rows.push([g.salon, g.mes, g.concepto, g.cantidad||"", Number(g.costo)||0, g.fechaPedido||"", g.fechaEntrega||"", g.avisoAnticipado?"Sí":"No", g.observacion||"", g.registradoPor||"", esGastoDir(g)?"Dirección":"Operaciones"]);
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Gastos filtrados");
@@ -2419,37 +2444,16 @@ function bindOpGastos(){
     const list = filtrarGastos(fs, fm, fq, fd1, fd2);
     const cuerpo = `<h2>Gastos filtrados</h2>
       <table class="rp-tabla">
-        <tr><th>Salón</th><th>Mes</th><th>Concepto</th><th>Cant.</th><th>Costo</th><th>Entrega</th><th>Aviso</th><th>Registró</th></tr>
-        ${list.length===0 ? `<tr><td colspan="8" style="text-align:center;color:#75746A;">Sin resultados</td></tr>` :
-          list.map(g=>filaTabla([g.salon, g.mes, g.concepto, g.cantidad||"—", fmtMoney(g.costo), g.fechaEntrega||"—", g.avisoAnticipado?"Sí":"No", g.registradoPor||"—"])).join("")}
+        <tr><th>Salón</th><th>Mes</th><th>Concepto</th><th>Cant.</th><th>Costo</th><th>Entrega</th><th>Aviso</th><th>Registró</th><th>Origen</th></tr>
+        ${list.length===0 ? `<tr><td colspan="9" style="text-align:center;color:#75746A;">Sin resultados</td></tr>` :
+          list.map(g=>filaTabla([g.salon, g.mes, g.concepto, g.cantidad||"—", fmtMoney(g.costo), g.fechaEntrega||"—", g.avisoAnticipado?"Sí":"No", g.registradoPor||"—", esGastoDir(g)?"Dirección":"Operaciones"])).join("")}
       </table>`;
     const fecha = new Date().toLocaleDateString("es-MX",{year:'numeric',month:'long',day:'numeric'});
     const detalleFiltros = [fs&&fs!=="Todos"?fs:null, fm&&fm!=="Todos"?fm:null, fq?`"${fq}"`:null, (fd1||fd2)?`del ${fd1||'…'} al ${fd2||'…'}`:null].filter(Boolean).join(" · ") || "sin filtros";
     abrirReporteHTML(`Gastos filtrados (${detalleFiltros}) · generado el ${fecha}`, cuerpo);
   };
   bindRowButtons();
-  function bindRowButtons(){
-    document.querySelectorAll("[data-del]").forEach(btn=>{
-      btn.onclick = ()=>{
-        showConfirmModal("¿Eliminar este gasto? Esta acción no se puede deshacer.", async ()=>{
-          const id = btn.dataset.del;
-          const g0 = DB.gastos.find(g=>g.id===id);
-          if(!g0 || !puedeModificarGasto(g0)){ showToast("No tienes permiso para eliminar esta compra."); return; }
-          const ok = await mutarDB(db=>{
-            const g = db.gastos.find(x=>x.id===id);
-            if(g && puedeModificarGasto(g)) db.gastos = db.gastos.filter(x=>x.id!==id);
-          });
-          if(ok) refresh();
-        }, "Sí, eliminar");
-      };
-    });
-    document.querySelectorAll("[data-edit]").forEach(btn=>{
-      btn.onclick = ()=>{
-        const g = DB.gastos.find(x=>x.id===btn.dataset.edit);
-        if(g && puedeModificarGasto(g)) showEditGastoModal(g, refresh);
-      };
-    });
-  }
+  function bindRowButtons(){ bindFilasGasto(refresh); }
 }
 function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 function esSoloLectura(){ return state.role === "direccion"; }
@@ -2487,8 +2491,8 @@ function buildWorkbookRespaldoCompleto(){
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(fondoRows), "Fondos");
 
-  const dirRows = [["Fecha","Mes","Área","Concepto","Monto","Lote","Registró","ID","Editado por","Editado en"]];
-  (DB.gastosDireccion||[]).forEach(g=>{ dirRows.push([g.fecha||"", g.mes||"", g.area||"", g.concepto||"", Number(g.monto)||0, g.lote||"", g.registradoPor||"", g.id||"", g.editadoPor||"", g.editadoEn||""]); });
+  const dirRows = [["Salón","Mes","Concepto","Cantidad","Costo","Fecha pedido","Fecha entrega","Avisó con anticipación","Observación","Registró","ID","Ticket","Tienda","Editado por","Editado en"]];
+  (DB.gastosDireccion||[]).forEach(g=>{ dirRows.push([g.salon||"", g.mes||"", g.concepto||"", g.cantidad||"", Number(g.costo)||0, g.fechaPedido||"", g.fechaEntrega||"", g.avisoAnticipado?"Sí":"No", g.observacion||"", g.registradoPor||"", g.id||"", g.ticketId||"", g.tienda||"", g.editadoPor||"", g.editadoEn||""]); });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dirRows), "Gastos Dirección");
 
   const presuRows = [["Salón", ...MESES]];
@@ -2514,7 +2518,7 @@ function revisarTamanoDB(){
 }
 
 function renderOpObservaciones(){
-  const notas = DB.gastos.filter(g=>g.observacion && g.observacion.trim())
+  const notas = todosLosGastos().filter(g=>g.observacion && g.observacion.trim())
     .sort((a,b)=>(b.registradoEn||"").localeCompare(a.registradoEn||""));
   if(notas.length===0) return `<div class="card"><div class="empty">No hay observaciones registradas.</div></div>`;
   return `<div class="card">
@@ -2529,7 +2533,7 @@ function renderOpObservaciones(){
   </div>`;
 }
 function bindOpObservaciones(){
-  const notas = DB.gastos.filter(g=>g.observacion && g.observacion.trim())
+  const notas = todosLosGastos().filter(g=>g.observacion && g.observacion.trim())
     .sort((a,b)=>(b.registradoEn||"").localeCompare(a.registradoEn||""));
   marcarObservacionesLeidas(null).then(()=>{
     const badge = document.querySelector('.tab[data-tab="observaciones"] .badge-count');
@@ -2558,33 +2562,28 @@ function bindOpObservaciones(){
 /* ---------------------------- TUTOR ---------------------------- */
 /* ============================ GASTOS DE DIRECCIÓN (pantallas) ============================ */
 function celdaMonto(n){ return n ? fmtMoney(n) : "—"; }
+function tagOrigen(g){ return esGastoDir(g) ? '<span class="tag tag-dir">Dirección</span>' : '<span class="tag tag-op">Operaciones</span>'; }
+function leyendaOrigen(){
+  return `<div class="legend"><span><i class="sw" style="background:var(--sage-500);"></i>Operaciones (caja chica)</span><span><i class="sw" style="background:var(--gold-600);"></i>Dirección (pago directo)</span></div>`;
+}
 function tablaDesgloseDireccion(){
-  const areas = SALONES.filter(a=>totalDirArea(a) > 0);
+  const salones = SALONES.filter(a=>totalDirArea(a) > 0);
   const meses = MESES.filter(m=>totalDirMes(m) > 0);
-  if(!meses.length) return `<p class="small-muted">Aún no hay gastos de Dirección en este ciclo.</p>`;
+  if(!meses.length) return `<p class="small-muted">Aún no hay compras de Dirección en este ciclo.</p>`;
   return `<div style="overflow-x:auto;"><table>
-    <tr><th>Mes</th>${areas.map(c=>`<th>${escAttr(c)}</th>`).join("")}<th>Total</th></tr>
-    ${meses.map(m=>`<tr><td>${m}</td>${areas.map(c=>`<td>${celdaMonto(totalDirMes(m,c))}</td>`).join("")}<td><strong>${fmtMoney(totalDirMes(m))}</strong></td></tr>`).join("")}
-    <tr class="rp-total"><td>Total del ciclo</td>${areas.map(c=>`<td>${celdaMonto(totalDirArea(c))}</td>`).join("")}<td><strong>${fmtMoney(totalDirCiclo())}</strong></td></tr>
+    <tr><th>Mes</th>${salones.map(c=>`<th>${escAttr(c)}</th>`).join("")}<th>Total</th></tr>
+    ${meses.map(m=>`<tr><td>${m}</td>${salones.map(c=>`<td>${celdaMonto(totalDirMes(m,c))}</td>`).join("")}<td><strong>${fmtMoney(totalDirMes(m))}</strong></td></tr>`).join("")}
+    <tr class="rp-total"><td>Total del ciclo</td>${salones.map(c=>`<td>${celdaMonto(totalDirArea(c))}</td>`).join("")}<td><strong>${fmtMoney(totalDirCiclo())}</strong></td></tr>
   </table></div>`;
 }
-function filaDirHTML(it){
-  it = it || {};
-  return `<tr class="gd-fila">
-    <td><select class="gd-area">${SALONES.map(c=>`<option value="${escAttr(c)}" ${c===it.area?"selected":""}>${escAttr(c)}</option>`).join("")}</select></td>
-    <td><input class="gd-concepto" placeholder="Ej. Hojas, luz, internet" value="${escAttr(it.concepto||"")}"></td>
-    <td><input class="gd-monto" type="number" min="0" step="0.01" placeholder="0.00" style="width:110px;" value="${escAttr(it.monto||"")}"></td>
-    <td><button type="button" class="link-btn gd-del" title="Quitar">✕</button></td>
-  </tr>`;
-}
 function renderGastosDireccion(){
-  const lista = (DB.gastosDireccion||[]).slice().sort((a,b)=> (b.fecha||"").localeCompare(a.fecha||"") || (b.registradoEn||"").localeCompare(a.registradoEn||""));
+  const lista = (DB.gastosDireccion||[]).slice().sort((a,b)=> (b.registradoEn||"").localeCompare(a.registradoEn||""));
   const mesesConGasto = MESES.filter(m=>totalDirMes(m)>0).length;
   const total = totalDirCiclo();
   return `
-  <div class="card" style="margin-bottom:16px;">
+  <div class="card" style="margin-bottom:16px;border-left:4px solid var(--gold-600);">
     <p class="section-title"><span class="dot"></span>Gastos de Dirección</p>
-    <p class="small-muted" style="margin:0;">Compras y pagos que Dirección cubre directamente, clasificados en las mismas áreas que usa Operaciones (Papelería, Servicios, etc.). Se llevan aparte: <strong>no afectan los presupuestos, fondos ni saldos de Operaciones</strong>; solo se suman en el total de la escuela.</p>
+    <p class="small-muted" style="margin:0;">Compras que Dirección paga directamente. <strong>Cuentan en el presupuesto de cada salón</strong> (gastado, restante y % usado), pero <strong>no afectan los fondos recibidos ni el saldo disponible de Operaciones</strong>, que se calculan solo con las compras de caja chica.</p>
   </div>
   <div class="grid grid-4" style="margin-bottom:16px;">
     <div class="card"><p class="metric-label">Gastado en el ciclo</p><p class="metric-value">${fmtMoney(total)}</p></div>
@@ -2592,122 +2591,33 @@ function renderGastosDireccion(){
     <div class="card"><p class="metric-label">Este mes</p><p class="metric-value">${fmtMoney(totalDirMes(mesDeFecha(hoyISO())))}</p></div>
     <div class="card"><p class="metric-label">Registros</p><p class="metric-value">${lista.length}</p></div>
   </div>
-  <div class="card" style="margin-bottom:16px;max-width:780px;">
-    <p class="section-title"><span class="dot"></span>Registrar gastos</p>
-    <div class="field" style="max-width:220px;"><label>Fecha</label><input id="gd-fecha" type="date" value="${hoyISO()}"></div>
-    <div style="overflow-x:auto;"><table>
-      <thead id="gd-thead"><tr><th>Área</th><th>Concepto</th><th>Monto ($)</th><th></th></tr></thead>
-      <tbody id="gd-tbody"></tbody>
-    </table></div>
-    <div class="flex-between" style="margin:10px 0 14px;gap:10px;flex-wrap:wrap;">
-      <button type="button" class="btn btn-secondary" id="gd-add">+ Agregar renglón</button>
-      <div style="font-size:15px;">Total: <strong id="gd-total">$0.00</strong></div>
-    </div>
-    <button class="btn btn-primary" id="gd-submit">Registrar gastos</button>
-  </div>
-  <div class="card" style="margin-bottom:16px;">
-    <p class="section-title"><span class="dot"></span>Desglose por mes y categoría</p>
+  ${renderOpRegistrar("direccion")}
+  <div class="card" style="margin:16px 0;">
+    <p class="section-title"><span class="dot"></span>Desglose por mes y salón (solo Dirección)</p>
     ${tablaDesgloseDireccion()}
   </div>
   <div class="card" style="overflow-x:auto;">
-    <p class="section-title"><span class="dot"></span>Detalle de gastos</p>
+    <p class="section-title"><span class="dot"></span>Detalle de compras de Dirección</p>
     ${lista.length ? `<table>
-      <tr><th>Fecha</th><th>Área</th><th>Concepto</th><th>Monto</th><th>Registró</th><th></th></tr>
-      ${lista.map(g=>`<tr><td>${escAttr(g.fecha)}</td><td>${escAttr(g.area)}</td><td>${escAttr(g.concepto)}</td><td>${fmtMoney(g.monto)}</td><td>${escAttr(g.registradoPor||"")}</td>
-        <td>${puedeUsarGastosDir() ? `<button class="link-btn" data-gd-edit="${escAttr(g.id)}">Editar</button> · <button class="link-btn" data-gd-del="${escAttr(g.id)}">Eliminar</button>` : ""}</td></tr>`).join("")}
+      <tr><th>Salón</th><th>Mes</th><th>Concepto</th><th>Cant.</th><th>Costo</th><th>Entrega</th><th>Aviso</th><th>Registró</th><th></th></tr>
+      ${lista.map(g=>`<tr class="row-dir"><td>${escAttr(g.salon)}</td><td>${escAttr(g.mes)}</td><td>${escAttr(g.concepto)}${g.ticketId ? `<div class="small-muted" style="font-size:11px;">🧾 ${escAttr(g.tienda || "Ticket")}</div>` : ""}</td><td>${escAttr(g.cantidad||"—")}</td><td>${fmtMoney(g.costo)}</td><td>${escAttr(g.fechaEntrega||"—")}</td>
+        <td>${g.avisoAnticipado ? '<span class="tag tag-ok">Sí</span>' : '<span class="tag tag-warn">No</span>'}</td><td>${escAttr(g.registradoPor||"—")}</td>
+        <td>${puedeModificarGasto(g) ? `<button class="link-btn" data-edit="${escAttr(g.id)}">Editar</button> · <button class="link-btn" data-del="${escAttr(g.id)}">Eliminar</button>` : ""}</td></tr>`).join("")}
     </table>` : `<p class="small-muted">Sin registros todavía.</p>`}
   </div>`;
 }
 function bindGastosDireccion(){
-  const tbody = document.getElementById("gd-tbody");
-  if(!tbody) return;
-  const recalcular = ()=>{ document.getElementById("gd-total").textContent = fmtMoney([...tbody.querySelectorAll(".gd-monto")].reduce((a,i)=>a+(Number(i.value)||0),0)); };
-  const agregar = ()=>{ tbody.insertAdjacentHTML("beforeend", filaDirHTML()); recalcular(); };
-  for(let i=0;i<3;i++) agregar();
-  tbody.addEventListener("input", recalcular);
-  tbody.addEventListener("click", e=>{
-    if(!e.target.classList.contains("gd-del")) return;
-    if(tbody.children.length > 1) e.target.closest("tr").remove(); else e.target.closest("tr").querySelectorAll("input").forEach(i=>i.value="");
-    recalcular();
-  });
-  tbody.addEventListener("keydown", e=>{
-    if(e.key !== "Enter" || !e.target.classList.contains("gd-monto")) return;
-    e.preventDefault();
-    if(e.target.closest("tr") === tbody.lastElementChild) agregar();
-    tbody.lastElementChild.querySelector(".gd-concepto").focus();
-  });
-  document.getElementById("gd-add").onclick = ()=>{ agregar(); tbody.lastElementChild.querySelector(".gd-concepto").focus(); };
   const refrescar = ()=>{ document.getElementById("op-content").innerHTML = renderOpTab(); bindOpTabEvents(); };
-  document.getElementById("gd-submit").onclick = ()=>{
-    const fecha = document.getElementById("gd-fecha").value;
-    const items = [];
-    for(const f of tbody.querySelectorAll("tr")){
-      const concepto = f.querySelector(".gd-concepto").value.trim(), montoTxt = f.querySelector(".gd-monto").value;
-      if(!concepto && !montoTxt) continue;
-      items.push({ fecha, area: f.querySelector(".gd-area").value, concepto, monto: Number(montoTxt) });
-    }
-    if(!items.length){ showToast("Agrega al menos un gasto con su monto."); return; }
-    for(let i=0;i<items.length;i++){ const err = validarGastoDir(items[i]); if(err){ showToast(items.length>1 ? `Renglón ${i+1}: ${err}` : err); return; } }
-    const total = items.reduce((a,x)=>a+x.monto,0);
-    showConfirmModal(`<div style="text-align:left;"><p style="margin:0 0 10px;"><strong>Confirma el registro (${escAttr(fecha)}):</strong></p>
-      ${items.map(x=>`<p style="margin:2px 0;">${escAttr(x.area)} — ${escAttr(x.concepto)}: ${fmtMoney(x.monto)}</p>`).join("")}
-      <p style="margin:8px 0 2px;font-weight:600;">Total: ${fmtMoney(total)}</p></div>`, async ()=>{
-      if(!(await registrarGastosDireccion(items))) return;
-      showToast(items.length>1 ? `Se registraron ${items.length} gastos.` : "Gasto registrado.");
-      refrescar();
-    }, "Sí, registrar");
-  };
-  document.querySelectorAll("[data-gd-edit]").forEach(b=>b.onclick = ()=>{
-    const g = (DB.gastosDireccion||[]).find(x=>x.id===b.dataset.gdEdit);
-    if(g && puedeUsarGastosDir()) showEditGastoDirModal(g, refrescar);
-  });
-  document.querySelectorAll("[data-gd-del]").forEach(b=>b.onclick = ()=>{
-    const id = b.dataset.gdDel;
-    if(!puedeUsarGastosDir()) return;
-    showConfirmModal("¿Eliminar este gasto de Dirección? No se puede deshacer.", async ()=>{
-      const ok = await mutarDB(db=>{ db.gastosDireccion = (db.gastosDireccion||[]).filter(x=>x.id!==id); });
-      if(ok){ showToast("Gasto eliminado."); refrescar(); }
-    }, "Sí, eliminar");
-  });
-}
-function showEditGastoDirModal(g, onSaved){
-  const wrap = document.createElement("div");
-  wrap.className = "modal-bg";
-  const cats = SALONES.concat(SALONES.includes(g.area) ? [] : [g.area]);
-  wrap.innerHTML = `
-    <div class="modal" style="max-width:460px;">
-      <p class="section-title"><span class="dot"></span>Editar gasto de Dirección</p>
-      <div class="grid grid-2">
-        <div class="field"><label>Fecha</label><input id="gde-fecha" type="date" value="${escAttr(g.fecha)}"></div>
-        <div class="field"><label>Área</label><select id="gde-area">${cats.map(c=>`<option value="${escAttr(c)}" ${c===g.area?"selected":""}>${escAttr(c)}</option>`).join("")}</select></div>
-      </div>
-      <div class="field"><label>Concepto</label><input id="gde-concepto" value="${escAttr(g.concepto)}"></div>
-      <div class="field"><label>Monto ($)</label><input id="gde-monto" type="number" min="0" step="0.01" value="${escAttr(g.monto)}"></div>
-      <div style="display:flex;gap:10px;">
-        <button class="btn btn-secondary" id="gde-cancel" style="flex:1;">Cancelar</button>
-        <button class="btn btn-primary" id="gde-guardar" style="flex:1;">Guardar cambio</button>
-      </div>
-    </div>`;
-  document.body.appendChild(wrap);
-  wrap.querySelector("#gde-cancel").onclick = ()=>wrap.remove();
-  wrap.querySelector("#gde-guardar").onclick = async ()=>{
-    const cambios = { fecha: wrap.querySelector("#gde-fecha").value, area: wrap.querySelector("#gde-area").value,
-      concepto: wrap.querySelector("#gde-concepto").value.trim(), monto: Number(wrap.querySelector("#gde-monto").value) };
-    const err = validarGastoDir(cambios);
-    if(err){ showToast(err); return; }
-    if(!puedeUsarGastosDir()){ showToast("No tienes permiso para modificar este gasto."); return; }
-    const ok = await mutarDB(db=>{ const x = (db.gastosDireccion||[]).find(y=>y.id===g.id); if(x) Object.assign(x, cambios, { mes: mesDeFecha(cambios.fecha), editadoEn: new Date().toISOString(), editadoPor: state.nombreOp||"" }); });
-    if(!ok) return;
-    wrap.remove(); showToast("Gasto actualizado."); onSaved();
-  };
+  bindOpRegistrar("direccion", refrescar);
+  bindFilasGasto(refrescar);
 }
 // TOTAL de la escuela (solo lectura): Operaciones y Dirección por separado, y la suma
 function tablaTotalPorArea(){
-  const areas = SALONES.filter(a=>totalGastadoCiclo(a)>0 || totalDirArea(a)>0);
+  const areas = SALONES.filter(a=>totalGastoOpSalon(a)>0 || totalDirArea(a)>0);
   if(!areas.length) return `<p class="small-muted">Aún no hay gastos registrados en este ciclo.</p>`;
   return `<div style="overflow-x:auto;"><table>
-    <tr><th>Área</th><th>Operaciones (caja chica)</th><th>Dirección</th><th>Total</th></tr>
-    ${areas.map(a=>`<tr><td>${escAttr(a)}</td><td>${celdaMonto(totalGastadoCiclo(a))}</td><td>${celdaMonto(totalDirArea(a))}</td><td><strong>${fmtMoney(totalGastadoCiclo(a)+totalDirArea(a))}</strong></td></tr>`).join("")}
+    <tr><th>Salón / área</th><th>Operaciones (caja chica)</th><th>Dirección</th><th>Total</th></tr>
+    ${areas.map(a=>`<tr><td>${escAttr(a)}</td><td>${celdaMonto(totalGastoOpSalon(a))}</td><td>${celdaMonto(totalDirArea(a))}</td><td><strong>${fmtMoney(totalGastoOpSalon(a)+totalDirArea(a))}</strong></td></tr>`).join("")}
     <tr class="rp-total"><td>Total del ciclo</td><td>${fmtMoney(totalOpCiclo())}</td><td>${fmtMoney(totalDirCiclo())}</td><td><strong>${fmtMoney(totalOpCiclo()+totalDirCiclo())}</strong></td></tr>
   </table></div>`;
 }
@@ -2723,29 +2633,12 @@ function tablaTotalEscuela(){
 function renderResumenTotalEscuela(){
   return `
   <div class="card" style="margin-top:22px;">
-    <p class="section-title"><span class="dot"></span>Gasto total de la escuela por área — ${escAttr(DB.ciclo)}</p>
-    <p class="small-muted" style="margin-top:0;">Suma informativa de lo gastado por Operaciones (caja chica) y lo que Dirección paga directamente, en cada área. No modifica presupuestos, fondos ni saldos.</p>
+    <p class="section-title"><span class="dot"></span>Quién pagó cada gasto, por salón — ${escAttr(DB.ciclo)}</p>
+    <p class="small-muted" style="margin-top:0;">Lo gastado por Operaciones (caja chica) y lo que Dirección paga directamente, mostrados por separado y sumados. La suma es lo que consume el presupuesto de cada salón.</p>
     ${tablaTotalPorArea()}
   </div>
   <div class="card" style="margin-top:16px;">
-    <p class="section-title"><span class="dot"></span>Gasto total de la escuela por mes</p>
-    ${tablaTotalEscuela()}
-  </div>`;
-}
-function renderTutorTotal(){
-  const opT = totalOpCiclo(), dirT = totalDirCiclo();
-  return `
-  <div class="grid grid-4" style="margin-bottom:22px;">
-    <div class="card"><p class="metric-label">Operaciones (caja chica)</p><p class="metric-value">${fmtMoney(opT)}</p></div>
-    <div class="card"><p class="metric-label">Dirección</p><p class="metric-value">${fmtMoney(dirT)}</p></div>
-    <div class="card"><p class="metric-label">Total de la escuela</p><p class="metric-value">${fmtMoney(opT+dirT)}</p></div>
-  </div>
-  <div class="card" style="margin-bottom:22px;">
-    <p class="section-title"><span class="dot"></span>Gasto total por área — ${escAttr(DB.ciclo)}</p>
-    ${tablaTotalPorArea()}
-  </div>
-  <div class="card">
-    <p class="section-title"><span class="dot"></span>Gasto total por mes</p>
+    <p class="section-title"><span class="dot"></span>Quién pagó cada gasto, por mes</p>
     ${tablaTotalEscuela()}
   </div>`;
 }
@@ -2765,15 +2658,15 @@ function renderTutor(){
   <div class="tabs">
     <div class="tab ${state.tab==='gastos'?'active':''}" data-ttab="gastos">Mis gastos</div>
     <div class="tab ${state.tab==='observaciones'?'active':''}" data-ttab="observaciones">Observaciones${notasCount?`<span class="badge-count">${notasCount}</span>`:""}</div>
-    <div class="tab ${state.tab==='anual'?'active':''}" data-ttab="anual">Resumen del ciclo</div>
-    <div class="tab ${state.tab==='total'?'active':''}" data-ttab="total">Total de la escuela</div>
+    <div class="tab ${state.tab==='anual'?'active':''}" data-ttab="anual">Mi salón en el ciclo</div>
+    <div class="tab ${state.tab==='resumen'?'active':''}" data-ttab="resumen">Resumen del Ciclo</div>
   </div>
   <div id="tt-content">${renderTutorTab()}</div>`;
 }
 function renderTutorTab(){
   if(state.tab==="observaciones") return renderTutorObservaciones();
   if(state.tab==="anual") return renderTutorAnual();
-  if(state.tab==="total") return renderTutorTotal();
+  if(state.tab==="resumen") return renderOpResumen() + renderResumenTotalEscuela();   // lo mismo que ven Dirección y Operaciones
   return renderTutorGastos();
 }
 function bindTutor(){
@@ -2841,7 +2734,7 @@ function renderTutorGastos(){
     ${list.length===0 ? `<div class="empty">Sin pedidos registrados este mes.</div>` : `
     <table>
       <tr><th>Concepto</th><th>Cantidad</th><th>Costo</th><th>Fecha pedido</th><th>Fecha entrega</th></tr>
-      ${list.map(x=>`<tr><td>${escAttr(x.concepto)}</td><td>${escAttr(x.cantidad||"—")}</td><td>${fmtMoney(x.costo)}</td><td>${x.fechaPedido||"—"}</td><td>${x.fechaEntrega||"—"}</td></tr>`).join("")}
+      ${list.map(x=>`<tr><td>${escAttr(x.concepto)}${esGastoDir(x) ? ' <span class="tag tag-dir">Dirección</span>' : ""}</td><td>${escAttr(x.cantidad||"—")}</td><td>${fmtMoney(x.costo)}</td><td>${x.fechaPedido||"—"}</td><td>${x.fechaEntrega||"—"}</td></tr>`).join("")}
     </table>`}
   </div>`;
 }
